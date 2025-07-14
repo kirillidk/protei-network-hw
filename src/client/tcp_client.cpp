@@ -182,48 +182,91 @@ void TcpClient::handle_connection_event(int fd, uint32_t events) {
 }
 
 void TcpClient::send_next_fragment(ConnectionState& conn) {
-    if (conn.current_fragment >= conn.fragments.size()) {
-        conn.sent_complete = true;
+    while (conn.current_fragment < conn.fragments.size()) {
+        const std::string& fragment = conn.fragments[conn.current_fragment];
+        ssize_t bytes_sent =
+            write(conn.fd, fragment.c_str(), fragment.length());
 
-        epoll_event event {};
-        event.events = EPOLLIN | EPOLLET;
-        event.data.fd = conn.fd;
-        epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn.fd, &event);
-        return;
+        if (bytes_sent > 0) {
+            conn.current_fragment++;
+        } else if (bytes_sent == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return;
+            } else {
+                std::cerr << "Send error for expression: " << conn.expression
+                          << std::endl;
+                conn.sent_complete = true;
+                conn.received_complete = true;
+                return;
+            }
+        }
     }
 
-    const std::string& fragment = conn.fragments[conn.current_fragment];
-    ssize_t bytes_sent = write(conn.fd, fragment.c_str(), fragment.length());
+    if (!conn.sent_complete) {
+        ssize_t bytes_sent = write(conn.fd, " ", 1);
+        if (bytes_sent > 0) {
+            conn.sent_complete = true;
 
-    if (bytes_sent > 0) {
-        conn.current_fragment++;
-
-        if (conn.current_fragment >= conn.fragments.size()) {
-            write(conn.fd, " ", 1);
+            epoll_event event {};
+            event.events = EPOLLIN | EPOLLET;
+            event.data.fd = conn.fd;
+            epoll_ctl(epoll_fd, EPOLL_CTL_MOD, conn.fd, &event);
+        } else if (bytes_sent == -1 && errno != EAGAIN &&
+                   errno != EWOULDBLOCK) {
+            std::cerr << "Send error for expression: " << conn.expression
+                      << std::endl;
+            conn.sent_complete = true;
+            conn.received_complete = true;
         }
     }
 }
 
 void TcpClient::handle_response(ConnectionState& conn) {
     char buffer[1024];
-    ssize_t bytes_read = read(conn.fd, buffer, sizeof(buffer) - 1);
 
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        conn.received_data += buffer;
+    while (true) {
+        ssize_t bytes_read = read(conn.fd, buffer, sizeof(buffer) - 1);
 
-        if (conn.received_data.find('\n') != std::string::npos) {
+        if (bytes_read > 0) {
+            buffer[bytes_read] = '\0';
+            conn.received_data += buffer;
+
+            if (conn.received_data.find('\n') != std::string::npos) {
+                conn.received_complete = true;
+                verify_result(conn);
+                break;
+            }
+        } else if (bytes_read == 0) {
+            std::cout << "Connection closed by server" << std::endl;
             conn.received_complete = true;
-            verify_result(conn);
+            if (!conn.received_data.empty()) {
+                verify_result(conn);
+            }
+            break;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            } else {
+                std::cerr << "Read error for expression: " << conn.expression
+                          << " (errno: " << errno << ")" << std::endl;
+                conn.received_complete = true;
+                break;
+            }
         }
-    } else if (bytes_read == 0) {
-        conn.received_complete = true;
-        verify_result(conn);
     }
 }
 
 void TcpClient::verify_result(const ConnectionState& conn) {
-    std::istringstream iss(conn.received_data);
+    std::string response = conn.received_data;
+
+    if (response.empty()) {
+        std::cerr << "Expression: " << conn.expression
+                  << " | Server response: EMPTY"
+                  << " | Expected: " << conn.expected_result << std::endl;
+        return;
+    }
+
+    std::istringstream iss(response);
     std::string result_str;
 
     if (iss >> result_str) {
@@ -234,19 +277,29 @@ void TcpClient::verify_result(const ConnectionState& conn) {
         } else {
             try {
                 long long server_result = std::stoll(result_str);
-                if (server_result != conn.expected_result) {
-                    std::cerr << "Expression: " << conn.expression
+                if (server_result == conn.expected_result) {
+                    std::cout << "✓ Expression: " << conn.expression
                               << " | Server response: " << server_result
                               << " | Expected: " << conn.expected_result
-                              << std::endl;
+                              << " | OK" << std::endl;
+                } else {
+                    std::cerr << "✗ Expression: " << conn.expression
+                              << " | Server response: " << server_result
+                              << " | Expected: " << conn.expected_result
+                              << " | MISMATCH" << std::endl;
                 }
-            } catch (const std::exception&) {
-                std::cerr << "Expression: " << conn.expression
+            } catch (const std::exception& e) {
+                std::cerr << "✗ Expression: " << conn.expression
                           << " | Server response: " << result_str
                           << " | Expected: " << conn.expected_result
-                          << std::endl;
+                          << " | PARSE_ERROR: " << e.what() << std::endl;
             }
         }
+    } else {
+        std::cerr << "✗ Expression: " << conn.expression
+                  << " | Server response: " << response
+                  << " | Expected: " << conn.expected_result
+                  << " | INVALID_RESPONSE" << std::endl;
     }
 }
 
