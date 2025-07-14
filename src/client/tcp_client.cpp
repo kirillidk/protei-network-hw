@@ -199,7 +199,7 @@ void TcpClient::send_next_fragment(ConnectionState& conn) {
         conn.current_fragment++;
 
         if (conn.current_fragment >= conn.fragments.size()) {
-            write(conn.fd, "\n", 1);
+            write(conn.fd, " ", 1);
         }
     }
 }
