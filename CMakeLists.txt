@@ -15,8 +15,19 @@ target_compile_options(calculator_lib PRIVATE
     -Wall -Wextra -Wpedantic
 )
 
-add_executable(example example/example.cpp)
-target_link_libraries(example PRIVATE calculator_lib)
+add_library(client_lib
+    src/client/tcp_client.cpp
+)
+
+target_include_directories(client_lib PUBLIC include)
+target_link_libraries(client_lib PRIVATE calculator_lib)
+
+target_compile_options(client_lib PRIVATE
+    -Wall -Wextra -Wpedantic
+)
 
 add_executable(server src/server/main.cpp)
 target_link_libraries(server PRIVATE calculator_lib)
+
+add_executable(client src/client/main.cpp)
+target_link_libraries(client PRIVATE client_lib)
