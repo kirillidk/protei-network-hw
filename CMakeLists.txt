@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(calculator_lib
     src/server/calculator.cpp
+    src/server/tcp_server.cpp
 )
 
 target_include_directories(calculator_lib PUBLIC include)
@@ -16,3 +17,6 @@ target_compile_options(calculator_lib PRIVATE
 
 add_executable(example example/example.cpp)
 target_link_libraries(example PRIVATE calculator_lib)
+
+add_executable(server src/server/main.cpp)
+target_link_libraries(server PRIVATE calculator_lib)
